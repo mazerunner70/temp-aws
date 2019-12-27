@@ -1,27 +1,21 @@
 import boto3
-import re
-import requests
-from requests_aws4auth import AWS4Auth
 import json
+import decimal
 
-region = 'eu-west-1'  # e.g. us-west-1
-service = 'es'
-credentials = boto3.Session().get_credentials()
-awsauth = AWS4Auth(credentials.access_key, credentials.secret_key, region, service, session_token=credentials.token)
-
-host = 'https://search-es-temp-6k7vrsrw544xrx5e3gnju3yvby.eu-west-1.es.amazonaws.com'  # the Amazon ES domain, including https://
-index = 'sensor_index'
-type = '_doc'
-url = host + '/' + index + '/' + type
-
-headers = {"Content-Type": "application/json"}
+from convertdict import convert
 
 s3 = boto3.client('s3')
+dynamodb = boto3.resource('dynamodb')
 
-# Regular expressions used to parse some simple log lines
-ip_pattern = re.compile('(\d+\.\d+\.\d+\.\d+)')
-time_pattern = re.compile('\[(\d+\/\w\w\w\/\d\d\d\d:\d\d:\d\d:\d\d\s-\d\d\d\d)\]')
-message_pattern = re.compile('\"(.+)\"')
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, decimal.Decimal):
+            if abs(o) % 1 > 0:
+                return float(o)
+            else:
+                return int(o)
+        return super(DecimalEncoder, self).default(o)
 
 
 # Lambda execution starts here
@@ -36,7 +30,15 @@ def handler(event, context):
         obj = s3.get_object(Bucket=bucket, Key=key)
         body = obj['Body'].read()
         dict = json.loads(body)
-        print "dict", dict
-        r = requests.post(url, auth=awsauth, json=dict, headers=headers)
-        print "response", r
-        print "text", r.text
+        print("dict", dict)
+
+        dataObj = convert(dict)
+
+        table = dynamodb.Table('my-db-12')
+        response = table.put_item(
+            Item=dataObj
+        )
+        print('Successful put')
+        print(json.dumps(response, indent=4, cls=DecimalEncoder))
+
+

@@ -75,6 +75,15 @@ Resources:
                   - 's3:PutObject'
                   - 'S3:GetObject'
                 Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+        - PolicyName: DynamoDbPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:PutItem'
+                Resource: !Sub "arn:aws:dynamodb:::table/${TableName}"
   S3ListenFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -83,7 +92,8 @@ Resources:
         S3Key: !Ref ListenerLambdaName
 
       Handler: sample.handler
-      Runtime: python2.7
+      Runtime: python3.7
+      Timeout: 15
       Role: !GetAtt S3ListenExecutionRole.Arn
   S3ListenFunctionPermissions:
     Type: AWS::Lambda::Permission
