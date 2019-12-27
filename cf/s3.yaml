@@ -9,12 +9,21 @@ Parameters:
     Type: String
     Description: The name of the S3 Bucket to create
 
+  TableName:
+    Type: String
+    Description: The name of the DynamoDB to create
+
 Metadata:
 
   AWS::CloudFormation::Interface:
     ParameterLabels:
       BucketName:
         default: S3 Bucket Name
+
+  AWS::CloudFormation::Interface:
+    ParameterLabels:
+      TableName:
+        default: Dynamo DB instance Name
 
 Resources:
 
@@ -74,9 +83,30 @@ Resources:
           Key: Description
           Value: S3 Access Logs
 
+  DynamoDBTable: 
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      AttributeDefinitions: 
+        - 
+          AttributeName: "timestamp"
+          AttributeType: "N"
+      KeySchema: 
+        - 
+          AttributeName: "timestamp"
+          KeyType: "HASH"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: "1"
+        WriteCapacityUnits: "1"
+      TableName: !Ref TableName
+
+
 Outputs:
 
   S3Bucket:
     Value: !Ref S3Bucket
-    Description: S3 Bucket for object storage
+    Description: S3 Bucket for receiving new readings
+
+  DynamoDb:
+    Value: !Ref DynamoDBTable
+    Description: DB for object storage
 
