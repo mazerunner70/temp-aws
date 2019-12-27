@@ -7,11 +7,15 @@ Parameters:
 
   BucketName:
     Type: String
-    Description: The name of the S3 Bucket to create
+    Description: The name of the S3 Bucket that will hold temperature measurements
 
   TableName:
     Type: String
     Description: The name of the DynamoDB to create
+
+  ListenerLambdaName:
+    Type: String
+    Description: Name of the lambda in 'wils-lambda-zips'
 
 Metadata:
 
@@ -26,62 +30,6 @@ Metadata:
         default: Dynamo DB instance Name
 
 Resources:
-
-  S3Bucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      # Need to define a static BucketName due to a circular dependency with the AWS::SNS::TopicPolicy
-      BucketName: !Ref BucketName
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      AccessControl: BucketOwnerFullControl
-      LifecycleConfiguration:
-        Rules:
-          -
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 3
-            NoncurrentVersionExpirationInDays: 3
-            Status: Enabled
-      LoggingConfiguration:
-        DestinationBucketName: !Ref S3BucketLogs
-        LogFilePrefix: !Sub '/logs/${BucketName}/'
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      Tags:
-        -
-          Key: Description
-          Value: Object Storage
-      VersioningConfiguration:
-        Status: Enabled
-
-  S3BucketLogs:
-    Type: AWS::S3::Bucket
-    Properties:
-      AccessControl: LogDeliveryWrite
-      LifecycleConfiguration:
-        Rules:
-          -
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 7
-            Status: Enabled
-            Transitions:
-              -
-                StorageClass: GLACIER
-                TransitionInDays: 30
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      Tags:
-        -
-          Key: Description
-          Value: S3 Access Logs
 
   DynamoDBTable: 
     Type: AWS::DynamoDB::Table
@@ -118,48 +66,24 @@ Resources:
               - Effect: Allow
                 Action: ['logs:*']
                 Resource: 'arn:aws:logs:*:*:*'
+        - PolicyName: S3Policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 'S3:GetObject'
+                Resource: !Sub "arn:aws:s3:::${BucketName}/*"
   S3ListenFunction:
     Type: AWS::Lambda::Function
     Properties:
       Code:
-        ZipFile: |
-          import traceback
-          import json
-          def obj_iterate(obj, params):
-              if isinstance(obj, dict):
-                  for k in obj:
-                      obj[k] = obj_iterate(obj[k], params)
-              elif isinstance(obj, list):
-                  for i, v in enumerate(obj):
-                      obj[i] = obj_iterate(v, params)
-              elif isinstance(obj, str):
-                  if obj.startswith("#!PyPlate"):
-                      params['output'] = None
-                      exec(obj, params)
-                      obj = params['output']
-              return obj
-          def handler(event, context):
-              print(json.dumps(event))
-              macro_response = {
-                  "requestId": event["requestId"],
-                  "status": "success"
-              }
-              try:
-                  params = {
-                      "params": event["templateParameterValues"],
-                      "template": event["fragment"],
-                      "account_id": event["accountId"],
-                      "region": event["region"]
-                  }
-                  response = event["fragment"]
-                  macro_response["fragment"] = obj_iterate(response, params)
-              except Exception as e:
-                  traceback.print_exc()
-                  macro_response["status"] = "failure"
-                  macro_response["errorMessage"] = str(e)
-              return macro_response
-      Handler: index.handler
-      Runtime: python3.6
+        S3Bucket: "wils-lambda-zips"
+        S3Key: !Ref ListenerLambdaName
+
+      Handler: sample.handler
+      Runtime: python2.7
       Role: !GetAtt S3ListenExecutionRole.Arn
   S3ListenFunctionPermissions:
     Type: AWS::Lambda::Permission
@@ -173,6 +97,77 @@ Resources:
       Name: !Sub 'PyPlate'
       Description: Processes inline python in templates
       FunctionName: !GetAtt S3ListenFunction.Arn
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DependsOn: BucketPermission
+    Properties:
+      # Need to define a static BucketName due to a circular dependency with the AWS::SNS::TopicPolicy
+      BucketName: !Ref BucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      AccessControl: BucketOwnerFullControl
+      LifecycleConfiguration:
+        Rules:
+          -
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 3
+            NoncurrentVersionExpirationInDays: 3
+            Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3BucketLogs
+        LogFilePrefix: !Sub '/logs/${BucketName}/'
+      NotificationConfiguration:
+        LambdaConfigurations:
+        - Event: 's3:ObjectCreated:*'
+          Function: !GetAtt S3ListenFunction.Arn
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        -
+          Key: Description
+          Value: Object Storage
+      VersioningConfiguration:
+        Status: Enabled
+
+  BucketPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref S3ListenFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${BucketName}"
+
+  S3BucketLogs:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          -
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+            Status: Enabled
+            Transitions:
+              -
+                StorageClass: GLACIER
+                TransitionInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        -
+          Key: Description
+          Value: S3 Access Logs
+
 
 
 Outputs:
